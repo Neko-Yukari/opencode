@@ -272,4 +272,37 @@ describe("CodeModeInstructions", () => {
       expect(sampled.text).toContain("  - tools.blender.tool12(")
     }),
   )
+
+  it.effect("renders a short notice when many listings of a partial catalog change", () =>
+    Effect.gen(function* () {
+      const inventory = (prefix: string) => ({
+        tools: Array.from({ length: 60 }, (_, index) => ({
+          type: "tool" as const,
+          name: `bulk.tool${index}`,
+          description: `${prefix} tool ${index}`,
+          signature: `tools.bulk.tool${index}({\n  value: string,\n}): Promise<unknown> // ${"x".repeat(120)}`,
+        })),
+      })
+      const initialized = yield* readInitial(CodeModeInstructions.make(inventory("Bulk")))
+      expect(initialized.text).toContain("The catalog is partial.")
+
+      const one = yield* readUpdate(
+        CodeModeInstructions.make({
+          tools: inventory("Bulk").tools.map((tool, index) => (index === 0 ? { ...tool, description: "Changed" } : tool)),
+        }),
+        initialized,
+      )
+      // One listing costs less than the search step it saves, so it is still restated.
+      expect(one.text).toContain("Changed tool listings supersede the previously listed ones:")
+      expect(one.text).toContain("tools.bulk.tool0(")
+
+      const changed = yield* readUpdate(CodeModeInstructions.make(inventory("Changed")), initialized)
+      expect(changed.text).toBe(
+        "The Code Mode tool catalog has changed.\n\n" +
+          "Tool listings changed in `bulk`. Re-run `search(...)` before relying on previous results.",
+      )
+      expect(changed.text).not.toContain("tools.bulk.")
+      expect(changed.text.length).toBeLessThan(200)
+    }),
+  )
 })

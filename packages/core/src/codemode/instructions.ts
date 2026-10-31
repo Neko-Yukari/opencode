@@ -51,6 +51,9 @@ ${render(selected)}`
   return replacement
 }
 
+// Characters of tool listings a partial-catalog delta restates before it points at search instead.
+const RESTATE_LIMIT = 1_000
+
 const listings = (catalog: CodeModeCatalog.Snapshot) =>
   catalog.namespaces.flatMap((namespace) => namespace.listings)
 
@@ -104,28 +107,40 @@ function incremental(
       ].join("\n"),
     )
   }
-  if (tools.added.length > 0) {
-    // A partial catalog already namespaces more than it inlines, so a new namespace is
-    // announced by name and found through search. Its restated listings could dwarf that line.
-    const fresh = new Set(namespaces.added.map((namespace) => namespace.name))
-    const listed = tools.added.filter(
-      (entry) => complete || !fresh.has(entry.path.split(".", 1)[0] ?? entry.path),
+  // A partial catalog already namespaces more than it inlines, so a new namespace is
+  // announced by name and found through search. Its restated listings could dwarf that line.
+  const owner = new Map(
+    current.namespaces.flatMap((namespace) => namespace.listings.map((listing) => [listing.path, namespace.name])),
+  )
+  const fresh = new Set(namespaces.added.map((namespace) => namespace.name))
+  const added = tools.added.filter((entry) => complete || !fresh.has(owner.get(entry.path)!))
+  const changed = tools.changed.map((change) => change.current)
+  const restated = [...added, ...changed].reduce((total, entry) => total + entry.line.length, 0)
+  if (!complete && restated > RESTATE_LIMIT) {
+    // A few lines are cheaper than the search step they save; past that, a partial catalog
+    // points the model at search instead. Namespaces whose count changed are named above.
+    const counted = new Set([...fresh, ...namespaces.changed.map((change) => change.current.name)])
+    const touched = [...new Set([...added, ...changed].map((entry) => owner.get(entry.path)!))].filter(
+      (name) => !counted.has(name),
     )
-    if (listed.length > 0) {
+    if (touched.length > 0) {
       parts.push(
-        ["New tools are available in addition to those previously listed:", ...listed.map((entry) => entry.line)].join(
+        `Tool listings changed in ${touched.map((name) => `\`${name}\``).join(", ")}. Re-run \`search(...)\` before relying on previous results.`,
+      )
+    }
+  } else {
+    if (added.length > 0) {
+      parts.push(
+        ["New tools are available in addition to those previously listed:", ...added.map((entry) => entry.line)].join(
           "\n",
         ),
       )
     }
-  }
-  if (tools.changed.length > 0) {
-    parts.push(
-      [
-        "Changed tool listings supersede the previously listed ones:",
-        ...tools.changed.map((change) => change.current.line),
-      ].join("\n"),
-    )
+    if (changed.length > 0) {
+      parts.push(
+        ["Changed tool listings supersede the previously listed ones:", ...changed.map((entry) => entry.line)].join("\n"),
+      )
+    }
   }
   if (tools.removed.length > 0) {
     parts.push(
